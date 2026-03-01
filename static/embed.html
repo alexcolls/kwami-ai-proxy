@@ -9,6 +9,13 @@
 			iframe { border: none; width: 100%; height: 100%; }
 			#loading { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: rgba(255,255,255,0.4); font-family: system-ui, sans-serif; font-size: 0.9rem; }
 		</style>
+		<script>
+			if (!globalThis.crossOriginIsolated) {
+				Object.defineProperty(globalThis, "crossOriginIsolated", {
+					value: true, writable: false,
+				});
+			}
+		</script>
 		<script src="/baremux/index.js"></script>
 		<script src="/scram/scramjet.all.js"></script>
 		<script src="config.js"></script>
@@ -36,12 +43,9 @@
 					scramjet.init();
 					await navigator.serviceWorker.register("./sw.js");
 
-					const wispUrl =
-						(location.protocol === "https:" ? "wss" : "ws") +
-						"://" + location.host + "/wisp/";
-
+					const bareUrl = location.origin + "/bare/";
 					const connection = new BareMux.BareMuxConnection("/baremux/worker.js");
-					await connection.setTransport("/epoxy/index.mjs", [{ wisp: wispUrl }]);
+					await connection.setTransport("/baremod/index.mjs", [bareUrl]);
 
 					const params = new URLSearchParams(location.search);
 					let targetUrl = params.get("url");
@@ -49,9 +53,7 @@
 						document.getElementById("loading").textContent = "No URL provided";
 						return;
 					}
-					if (!targetUrl.startsWith("http")) {
-						targetUrl = "https://" + targetUrl;
-					}
+					if (!targetUrl.startsWith("http")) targetUrl = "https://" + targetUrl;
 
 					const frame = scramjet.createFrame();
 					document.getElementById("loading").remove();
@@ -62,14 +64,170 @@
 
 					frame.go(targetUrl);
 
+					// --- Page content extraction ---
+					function extractPageContent() {
+						try {
+							const doc = frame.frame.contentDocument;
+							if (!doc || !doc.body) return null;
+
+							const textEl = doc.querySelector("main, article, [role='main'], .content, #content, body");
+							const text = (textEl || doc.body).innerText.slice(0, 3000);
+
+							const items = [];
+							doc.querySelectorAll("a[href], button, input, select, textarea, [role='link'], [role='button']").forEach((el, i) => {
+								if (i > 40) return;
+								const tag = el.tagName.toLowerCase();
+								const label = (
+									el.textContent ||
+									el.getAttribute("aria-label") ||
+									el.getAttribute("title") ||
+									el.getAttribute("placeholder") ||
+									""
+								).trim().slice(0, 80);
+								if (!label) return;
+								if (tag === "a") items.push({ type: "link", label, index: i });
+								else if (tag === "button" || el.getAttribute("role") === "button") items.push({ type: "button", label, index: i });
+								else if (tag === "input") items.push({ type: "input", label: el.getAttribute("placeholder") || el.getAttribute("name") || label, index: i });
+								else if (tag === "select") items.push({ type: "select", label, index: i });
+								else if (tag === "textarea") items.push({ type: "textarea", label: el.getAttribute("placeholder") || label, index: i });
+								else items.push({ type: tag, label, index: i });
+							});
+
+							const title = doc.title || "";
+							return { title, text, elements: items };
+						} catch (e) {
+							console.warn("extractPageContent error:", e);
+							return null;
+						}
+					}
+
+					function sendPageContent() {
+						const content = extractPageContent();
+						if (content && window.parent !== window) {
+							window.parent.postMessage({ type: "scramjet:page_content", ...content }, "*");
+						}
+					}
+
+					// Send page content after navigation
 					frame.addEventListener("urlchange", (e) => {
 						if (e.url && window.parent !== window) {
-							window.parent.postMessage(
-								{ type: "scramjet:urlchange", url: e.url },
-								"*"
-							);
+							window.parent.postMessage({ type: "scramjet:urlchange", url: e.url }, "*");
+						}
+						setTimeout(sendPageContent, 1500);
+					});
+
+					// Also send content shortly after initial load
+					setTimeout(sendPageContent, 2500);
+
+					// --- Command handler (click, type, read) ---
+					function findElement(description) {
+						try {
+							const doc = frame.frame.contentDocument;
+							if (!doc) return null;
+							const desc = description.toLowerCase().trim();
+
+							const candidates = doc.querySelectorAll("a[href], button, input, select, textarea, [role='link'], [role='button'], h1, h2, h3, [data-testid]");
+							let best = null;
+							let bestScore = 0;
+
+							for (const el of candidates) {
+								const label = (
+									el.textContent ||
+									el.getAttribute("aria-label") ||
+									el.getAttribute("title") ||
+									el.getAttribute("placeholder") ||
+									""
+								).trim().toLowerCase();
+								if (!label) continue;
+
+								let score = 0;
+								if (label === desc) score = 100;
+								else if (label.includes(desc)) score = 60;
+								else if (desc.includes(label)) score = 40;
+								else {
+									const words = desc.split(/\s+/);
+									const matches = words.filter(w => label.includes(w)).length;
+									score = (matches / words.length) * 30;
+								}
+
+								if (score > bestScore) {
+									bestScore = score;
+									best = el;
+								}
+							}
+							return best;
+						} catch (e) {
+							console.warn("findElement error:", e);
+							return null;
+						}
+					}
+
+					window.addEventListener("message", (e) => {
+						if (!e.data || e.data.type !== "scramjet:command") return;
+						const { action, description, text: inputText, id } = e.data;
+						let result = "ok";
+
+						try {
+							if (action === "read_page") {
+								const content = extractPageContent();
+								result = content ? JSON.stringify(content) : "Could not read page";
+							} else if (action === "click") {
+								const el = findElement(description || "");
+								if (el) {
+									el.scrollIntoView({ behavior: "smooth", block: "center" });
+									setTimeout(() => el.click(), 300);
+									result = "Clicked: " + (el.textContent || "").trim().slice(0, 60);
+								} else {
+									result = "Could not find element: " + description;
+								}
+							} else if (action === "type") {
+								const doc = frame.frame.contentDocument;
+								const active = doc?.activeElement;
+								if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) {
+									active.value = (active.value || "") + inputText;
+									active.dispatchEvent(new Event("input", { bubbles: true }));
+									result = "Typed: " + inputText;
+								} else if (description) {
+									const el = findElement(description);
+									if (el) {
+										el.focus();
+										el.value = inputText;
+										el.dispatchEvent(new Event("input", { bubbles: true }));
+										result = "Typed in " + description;
+									} else {
+										result = "Could not find input: " + description;
+									}
+								} else {
+									result = "No active input field found";
+								}
+							} else if (action === "press_key") {
+								const doc = frame.frame.contentDocument;
+								if (doc) {
+									doc.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: description, bubbles: true }));
+									doc.activeElement?.dispatchEvent(new KeyboardEvent("keyup", { key: description, bubbles: true }));
+									if (description === "Enter") {
+										const form = doc.activeElement?.closest("form");
+										if (form) form.submit();
+									}
+									result = "Pressed: " + description;
+								}
+							} else if (action === "scroll") {
+								const doc = frame.frame.contentDocument;
+								if (doc) {
+									const delta = (description === "up" ? -400 : 400);
+									doc.defaultView?.scrollBy(0, delta);
+									result = "Scrolled " + description;
+								}
+							}
+						} catch (err) {
+							result = "Error: " + err.message;
+						}
+
+						if (window.parent !== window) {
+							window.parent.postMessage({ type: "scramjet:command_result", id, result }, "*");
 						}
 					});
+
 				} catch (err) {
 					document.getElementById("loading").textContent = "Error: " + err.message;
 					console.error("Scramjet embed error:", err);

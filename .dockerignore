@@ -1,5 +1,4 @@
 node_modules
-.git
 rewriter/target
 rewriter/wasm/out
 dist

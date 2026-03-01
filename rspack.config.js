@@ -73,38 +73,38 @@ const iifeConfig = defineConfig({
 		new rspack.DefinePlugin({
 			REWRITERWASM: "undefined",
 		}),
-		new rspack.DefinePlugin({
-			COMMITHASH: (() => {
-				try {
-					const hash = JSON.stringify(
-						execSync("git rev-parse --short HEAD", {
-							encoding: "utf-8",
-						}).replace(/\r?\n|\r/g, "")
-					);
+	new rspack.DefinePlugin({
+		COMMITHASH: (() => {
+			try {
+				const hash = JSON.stringify(
+					execSync("git rev-parse --short HEAD", {
+						encoding: "utf-8",
+					}).replace(/\r?\n|\r/g, "")
+				);
 
-					return hash;
-				} catch {
-					return "unknown";
-				}
-			})(),
-		}),
-		process.env.DEBUG
-			? new RsdoctorRspackPlugin({
-					supports: {
-						parseBundle: true,
-						banner: true,
-					},
-				})
-			: null,
-	],
-	target: "webworker",
-	ignoreWarnings: [
-		{
-			module: /src\/entry\.ts/,
-			message:
-				/Critical dependency: the request of a dependency is an expression/,
-		},
-	],
+				return hash;
+			} catch {
+				return JSON.stringify("unknown");
+			}
+		})(),
+	}),
+	process.env.DEBUG
+		? new RsdoctorRspackPlugin({
+				supports: {
+					parseBundle: true,
+					banner: true,
+				},
+			})
+		: null,
+],
+target: "webworker",
+ignoreWarnings: [
+	{
+		module: /src\/entry\.ts/,
+		message:
+			/Critical dependency: the request of a dependency is an expression/,
+	},
+],
 });
 
 // Configuration for ES module build
@@ -191,7 +191,7 @@ const moduleConfig = defineConfig({
 
 					return hash;
 				} catch {
-					return "unknown";
+					return JSON.stringify("unknown");
 				}
 			})(),
 		}),
