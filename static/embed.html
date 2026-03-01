@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Kwami Navigation</title>
+		<style>
+			body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+			iframe { border: none; width: 100%; height: 100%; }
+			#loading { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: rgba(255,255,255,0.4); font-family: system-ui, sans-serif; font-size: 0.9rem; }
+		</style>
+		<script src="/baremux/index.js"></script>
+		<script src="/scram/scramjet.all.js"></script>
+		<script src="config.js"></script>
+		<script src="store.js"></script>
+	</head>
+	<body>
+		<div id="loading">Loading...</div>
+		<script>
+			const { ScramjetController } = $scramjetLoadController();
+			const scramjet = new ScramjetController({
+				files: {
+					wasm: "/scram/scramjet.wasm.wasm",
+					all: "/scram/scramjet.all.js",
+					sync: "/scram/scramjet.sync.js",
+				},
+				flags: {
+					rewriterLogs: false,
+					scramitize: false,
+					cleanErrors: true,
+					sourcemaps: false,
+				},
+			});
+
+			scramjet.init();
+			navigator.serviceWorker.register("./sw.js");
+
+			const connection = new BareMux.BareMuxConnection("/baremux/worker.js");
+			connection.setTransport(store.transport, [{ wisp: store.wispurl }]);
+
+			window.addEventListener("load", async () => {
+				const params = new URLSearchParams(location.search);
+				let targetUrl = params.get("url");
+				if (!targetUrl) {
+					document.getElementById("loading").textContent = "No URL provided";
+					return;
+				}
+				if (!targetUrl.startsWith("http")) {
+					targetUrl = "https://" + targetUrl;
+				}
+
+				const frame = scramjet.createFrame();
+				document.getElementById("loading").remove();
+				document.body.appendChild(frame.frame);
+				frame.frame.style.width = "100%";
+				frame.frame.style.height = "100%";
+				frame.frame.style.border = "none";
+
+				frame.go(targetUrl);
+
+				// Notify parent of URL changes
+				frame.addEventListener("urlchange", (e) => {
+					if (e.url && window.parent !== window) {
+						window.parent.postMessage({ type: "scramjet:urlchange", url: e.url }, "*");
+					}
+				});
+			});
+		</script>
+	</body>
+</html>
