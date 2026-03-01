@@ -12,59 +12,69 @@
 		<script src="/baremux/index.js"></script>
 		<script src="/scram/scramjet.all.js"></script>
 		<script src="config.js"></script>
-		<script src="store.js"></script>
 	</head>
 	<body>
 		<div id="loading">Loading...</div>
 		<script>
-			const { ScramjetController } = $scramjetLoadController();
-			const scramjet = new ScramjetController({
-				files: {
-					wasm: "/scram/scramjet.wasm.wasm",
-					all: "/scram/scramjet.all.js",
-					sync: "/scram/scramjet.sync.js",
-				},
-				flags: {
-					rewriterLogs: false,
-					scramitize: false,
-					cleanErrors: true,
-					sourcemaps: false,
-				},
-			});
+			(async () => {
+				try {
+					const { ScramjetController } = $scramjetLoadController();
+					const scramjet = new ScramjetController({
+						files: {
+							wasm: "/scram/scramjet.wasm.wasm",
+							all: "/scram/scramjet.all.js",
+							sync: "/scram/scramjet.sync.js",
+						},
+						flags: {
+							rewriterLogs: false,
+							scramitize: false,
+							cleanErrors: true,
+							sourcemaps: false,
+						},
+					});
 
-			scramjet.init();
-			navigator.serviceWorker.register("./sw.js");
+					scramjet.init();
+					await navigator.serviceWorker.register("./sw.js");
 
-			const connection = new BareMux.BareMuxConnection("/baremux/worker.js");
-			connection.setTransport(store.transport, [{ wisp: store.wispurl }]);
+					const wispUrl =
+						(location.protocol === "https:" ? "wss" : "ws") +
+						"://" + location.host + "/wisp/";
 
-			window.addEventListener("load", async () => {
-				const params = new URLSearchParams(location.search);
-				let targetUrl = params.get("url");
-				if (!targetUrl) {
-					document.getElementById("loading").textContent = "No URL provided";
-					return;
-				}
-				if (!targetUrl.startsWith("http")) {
-					targetUrl = "https://" + targetUrl;
-				}
+					const connection = new BareMux.BareMuxConnection("/baremux/worker.js");
+					await connection.setTransport("/epoxy/index.mjs", [{ wisp: wispUrl }]);
 
-				const frame = scramjet.createFrame();
-				document.getElementById("loading").remove();
-				document.body.appendChild(frame.frame);
-				frame.frame.style.width = "100%";
-				frame.frame.style.height = "100%";
-				frame.frame.style.border = "none";
-
-				frame.go(targetUrl);
-
-				// Notify parent of URL changes
-				frame.addEventListener("urlchange", (e) => {
-					if (e.url && window.parent !== window) {
-						window.parent.postMessage({ type: "scramjet:urlchange", url: e.url }, "*");
+					const params = new URLSearchParams(location.search);
+					let targetUrl = params.get("url");
+					if (!targetUrl) {
+						document.getElementById("loading").textContent = "No URL provided";
+						return;
 					}
-				});
-			});
+					if (!targetUrl.startsWith("http")) {
+						targetUrl = "https://" + targetUrl;
+					}
+
+					const frame = scramjet.createFrame();
+					document.getElementById("loading").remove();
+					document.body.appendChild(frame.frame);
+					frame.frame.style.width = "100%";
+					frame.frame.style.height = "100%";
+					frame.frame.style.border = "none";
+
+					frame.go(targetUrl);
+
+					frame.addEventListener("urlchange", (e) => {
+						if (e.url && window.parent !== window) {
+							window.parent.postMessage(
+								{ type: "scramjet:urlchange", url: e.url },
+								"*"
+							);
+						}
+					});
+				} catch (err) {
+					document.getElementById("loading").textContent = "Error: " + err.message;
+					console.error("Scramjet embed error:", err);
+				}
+			})();
 		</script>
 	</body>
 </html>

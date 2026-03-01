@@ -16,8 +16,8 @@ RUN mkdir -p dist
 WORKDIR /app/rewriter/wasm
 RUN bash build.sh
 
-# Stage 2: Build JS with rspack
-FROM node:22-bookworm-slim AS node-builder
+# Stage 2: Build JS and run production server
+FROM node:22-bookworm-slim
 
 RUN npm install -g pnpm@9
 
@@ -30,20 +30,6 @@ COPY --from=rust-builder /app/dist/scramjet.wasm.wasm dist/
 COPY --from=rust-builder /app/rewriter/wasm/out/ rewriter/wasm/out/
 
 RUN pnpm build
-
-# Stage 3: Production runtime
-FROM node:22-bookworm-slim
-
-RUN npm install -g pnpm@9
-
-WORKDIR /app
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --no-frozen-lockfile --prod
-
-COPY --from=node-builder /app/dist/ dist/
-COPY static/ static/
-COPY assets/ assets/
-COPY server.production.js .
 
 EXPOSE 1337
 
